@@ -41,3 +41,10 @@ $RECYCLE.BIN/
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# R data and heavy files that are downloaded by the script anyway
+.RData
+.Rhistory
+.Rproj.user
+RepData2_cache
+StormData.csv.bz2

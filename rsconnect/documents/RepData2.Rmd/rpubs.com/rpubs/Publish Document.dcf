@@ -1,0 +1,7 @@
+name: Publish Document
+account: rpubs
+server: rpubs.com
+bundleId:
+        https://api.rpubs.com/api/v1/document/88700/3ee0ee5968f344dd8b57a65aa55d7680
+url: http://rpubs.com/joaoclemencio/88700
+when: 1437597092.66459

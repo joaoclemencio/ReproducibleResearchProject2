@@ -1,0 +1,297 @@
+---
+title: "Analysis of severe weather events across the USA"
+author: "Joao Clemencio"
+date: "22 July 2015"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache=TRUE)
+```
+
+```{r load_packages, echo=FALSE, warning=FALSE, message=FALSE}
+library(lubridate, quietly = T)
+library(dplyr, quietly = T)
+library(tidyr, quietly = T)
+library(ggplot2, quietly = T)
+library(lattice, quietly = T)
+library(R.utils, quietly = T)
+```
+
+This is an analysis of the Storm Data dataset.
+
+The questions to be addressed are:
+
+1. Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+
+2. Across the United States, which types of events have the greatest economic consequences?
+
+# Data Processing
+
+## Download the data
+
+```{r download_data}
+if(!file.exists('StormData.csv.bz2')) {
+  file = 'https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2'
+  download.file(file, destfile = 'StormData.csv.bz2')
+}
+
+storm.data = read.csv('StormData.csv.bz2', stringsAsFactors = FALSE)
+storm.data = storm.data %>% tbl_df
+
+storm.data
+
+```
+
+
+The code above downloads and extracts the data to be processed. [Download the Storm Data Documentation here.](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
+
+## Data Cleansing
+
+There is some detailed information about the storm data csv in [this docx file](http://www1.ncdc.noaa.gov/pub/data/swdi/stormevents/csvfiles/Storm-Data-Export-Format.docx).
+
+Only a few columns are required to answer the proposed questions:
+
+* EVTYPE - Since we want to address each event type separately
+* FATALITIES and INJURIES - to address question 1 regarding population health
+* PROPDMG, PROPDMGEXP, CROPDMG and CROPDMGEXP - to address question 2 regarding economic consequences
+
+
+### Column selection and name simplification
+
+```{r data_tidying}
+storm.data = select(storm.data, 
+	event.type = EVTYPE,
+	health.fatalities = FATALITIES,
+	health.injuries = INJURIES,
+	economic.property.damage = PROPDMG,
+	economic.property.damage.exponent = PROPDMGEXP,
+	economic.crop.damage = CROPDMG,
+	economic.crop.damage.exponent = CROPDMGEXP
+)
+
+storm.data %>% select(event.type) %>% distinct
+
+```
+
+### Grouping
+
+After this initial processing, we can see that over 95% of events are now grouped into 9 simpler categories.
+
+```{r data_tidying_2}
+storm.data = storm.data %>%
+  mutate(
+    event.type = as.character(event.type) %>%
+      trim %>%
+      tolower %>%
+      gsub('.*hail.*', 'hail', .) %>%
+      gsub('.*tstm.*', 'thunderstorm', .) %>%
+      gsub('.*thunderstorm.*', 'thunderstorm', .) %>%
+      gsub('.*tornado.*', 'tornado', .) %>%
+      gsub('.*flood.*', 'flood', .) %>%
+      gsub('.*wind.*', 'wind', .) %>% 
+      gsub('.*lightning.*', 'lightning', .) %>%  
+      gsub('.*snow.*', 'snow', .) %>%  
+      gsub('.*rain.*', 'rain', .) %>%
+      gsub('.*winter.*', 'winter', .)
+    )
+
+```
+
+To simplify, we group the remaining categories into 'other' and apply this transformation to the original data.frame.
+
+```{r grouping_2}
+
+storm.data %>% select(event.type) %>% distinct
+
+storm.data = storm.data %>%
+  mutate(
+    event.type = event.type %>%
+      gsub('^(?!.*(hail|thunderstorm|tornado|flood|wind|lightning|snow|rain|winter)).*$', 'other', ., perl = T)
+  )
+
+storm.data %>% select(event.type) %>% distinct
+
+```
+
+### Damage exponent
+
+The damage exponent values also need cleaning. The following rules were applied:
+
+* H or h to mean hecto                == 100
+* K or k to mean kilo                 == 1000
+* M or m to mean mega                 == 1000000
+* B or b to mean giga                 == 1000000000
+* Any number n to mean it's exponent  == 10^n
+* +, - or nothing to mean nothing     == 0
+
+```{r damage_exponent}
+
+property.new.exp = c(1, 1, 1, 1, 1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000, 100, 100, 1000, 1000000, 1000000)
+storm.data$economic.property.damage.exponent = factor(storm.data$economic.property.damage.exponent)
+levels(storm.data$economic.property.damage.exponent) = property.new.exp
+storm.data$economic.property.damage.exponent = as.numeric(storm.data$economic.property.damage.exponent)
+rm(property.new.exp)
+
+crop.new.exp = c(1, 1, 1, 100, 1000000000, 1000, 1000, 1000000, 1000000)
+storm.data$economic.crop.damage.exponent = factor(storm.data$economic.crop.damage.exponent)
+levels(storm.data$economic.crop.damage.exponent) = crop.new.exp
+storm.data$economic.crop.damage.exponent = as.numeric(storm.data$economic.crop.damage.exponent)
+rm(crop.new.exp)
+
+```
+
+
+```{r}
+
+# and merge into property damage
+storm.data = storm.data %>%
+  mutate(
+    economic.property.damage = economic.property.damage * economic.property.damage.exponent,
+    economic.crop.damage = economic.crop.damage * economic.crop.damage.exponent
+  ) %>%
+  select(
+    -economic.property.damage.exponent,
+    -economic.crop.damage.exponent
+  )
+
+```
+
+## Results
+
+### Health impacts
+
+To measure the Health Impacts of each event type, we will focus on Fatalities and Injuries.
+
+```{r storm_health, fig.width=10}
+
+storm.health <- storm.data %>%
+  select(
+    Event = event.type,
+    Fatalities = health.fatalities,
+    Injuries = health.injuries) %>%
+  gather(
+    key = Degree,
+    value = Quantity,
+    Fatalities:Injuries) %>%
+  group_by(
+    Event,
+    Degree) %>%
+  summarise(
+    Quantity = sum(Quantity)) %>%
+  group_by() %>%
+  mutate(
+    Event = as.factor(Event))
+
+storm.health.order = storm.health %>%
+  select(-Degree) %>%
+  group_by(Event) %>%
+  summarise(Quantity = sum(Quantity)) %>%
+  arrange(desc(Quantity))
+
+storm.health$Event = factor(storm.health$Event, levels = storm.health.order$Event[order(storm.health.order$Quantity, decreasing = TRUE)])
+
+storm.health.chart <- ggplot(
+  storm.health, 
+  aes(
+    x = Event, 
+    y = Quantity, 
+    fill = Degree
+    )
+  ) + 
+  
+  geom_bar(
+    stat = "identity",
+    position = "stack"
+    ) + 
+  
+  facet_grid(
+    Degree ~ ., 
+    scales = 'free') +
+  
+  ggtitle("Fatalities and Injuries by Event")
+
+print(storm.health.chart)
+
+```
+
+The evidence point towards Tornadoes being by far the largest cause of Fatalities and Injuries among natural disasters.
+
+
+### Economic Impacts
+
+To calculate economic impacts by event type, we perform a similar analysis, this time measuring Property and Crop Damages.
+
+```{r storm_damage, fig.width=10}
+
+storm.damage <- storm.data %>%
+  select(
+    Event = event.type,
+    Property = economic.property.damage,
+    Crop = economic.crop.damage) %>%
+  gather(
+    key = Type,
+    value = Value,
+    Property:Crop) %>%
+  group_by(
+    Event,
+    Type) %>%
+  summarise(
+    Value = sum(Value)) %>%
+  group_by() %>%
+  mutate(
+    Event = as.factor(Event))
+
+storm.damage.order = storm.damage %>%
+  select(-Type) %>%
+  group_by(Event) %>%
+  summarise(Value = sum(Value)) %>%
+  arrange(desc(Value))
+
+storm.damage$Event = factor(storm.damage$Event, levels = storm.damage.order$Event[order(storm.damage.order$Value, decreasing = TRUE)])
+
+storm.damage.chart <- ggplot(
+  storm.damage, 
+  aes(
+    x = Event, 
+    y = Value, 
+    fill = Type
+    )
+  ) + 
+  
+  geom_bar(
+    stat = "identity"
+    ) + 
+  
+  facet_grid(
+    Type ~ ., 
+    scales = 'free') +
+  
+  ggtitle("Property and Crop Damages by Event")
+
+print(storm.damage.chart)
+
+```
+
+From the chart, we can conclude that Tornadoes, Thunderstorms and Floods are by far the greatest causes of damage economically.
+
+These 3 are not the worst causes looking only at crop damage, where Hail seems to be the biggest culprit. However, property damage has much more of an economic impact than crop damage, as can be seen in the chart below.
+
+```{r chart2, fig.width=10}
+storm.damage.chart2 <- ggplot(
+  storm.damage, 
+  aes(
+    x = Event, 
+    y = Value, 
+    fill = Type
+    )
+  ) + 
+  
+  geom_bar(
+    stat = "identity",
+    position = "stack"
+    ) +
+  
+  ggtitle("Total Damages by Event")
+print(storm.damage.chart2)
+```
